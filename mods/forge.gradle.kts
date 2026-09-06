@@ -239,12 +239,15 @@ dependencies {
     val mixinExtrasVersion = "0.5.4"
     compileOnly("io.github.llamalad7:mixinextras-common:$mixinExtrasVersion")
     annotationProcessor("io.github.llamalad7:mixinextras-common:$mixinExtrasVersion")
-    implementation("io.github.llamalad7:mixinextras-forge:$mixinExtrasVersion")
-    val mixinExtrasForge = requireNotNull(
-        add("jarJar", "io.github.llamalad7:mixinextras-forge:$mixinExtrasVersion")
-    )
-    jarJar.configure(mixinExtrasForge) {
-        setRange("[$mixinExtrasVersion,)")
+    // Forge 1.21.11+ bundles mixinextras-forge 0.5.3 itself; older Forge does not provide MixinExtras, so it must be embedded.
+    if (!stonecutter.eval(minecraftVersion, ">=1.21.11")) {
+        implementation("io.github.llamalad7:mixinextras-forge:$mixinExtrasVersion")
+        val mixinExtrasForge = requireNotNull(
+            add("jarJar", "io.github.llamalad7:mixinextras-forge:$mixinExtrasVersion")
+        )
+        jarJar.configure(mixinExtrasForge) {
+            setRange("[$mixinExtrasVersion,)")
+        }
     }
 
     implementation(project(":common"))
@@ -345,9 +348,11 @@ tasks.jar {
     archiveClassifier.set("thin")
 }
 
-tasks.named<ShadowJar>("shadowJar") {
+val shadowJarTask = tasks.named<ShadowJar>("shadowJar")
+shadowJarTask.configure {
     configurations = listOf(shadedDependencies)
-    archiveClassifier.set(if (needsSrgReobf) "dev-shadow" else "")
+    // Keep a distinct classifier on every version so the shadowJarJar output never collides with this archive.
+    archiveClassifier.set("shadow")
     addMultiReleaseAttribute.set(false)
     exclude("META-INF/*.DSA", "META-INF/*.RSA", "META-INF/*.SF", "META-INF/MANIFEST.MF", "mappings/**")
     dependencies {
@@ -359,6 +364,9 @@ tasks.named<ShadowJar>("shadowJar") {
 val jarJarTask = tasks.named<Jar>("shadowJarJar") {
     archiveClassifier.set(if (needsSrgReobf) "dev-jarjar" else "")
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    // The jarjar plugin replays the shadowJar CopySpec, which misses the shaded dependencies
+    // (ShadowJar weaves them in during its copy action). Merge in the full shadow archive explicitly.
+    from(shadowJarTask.flatMap { it.archiveFile }.map { zipTree(it.asFile) })
 }
 
 val reobfShadowJar = if (needsSrgReobf) {
